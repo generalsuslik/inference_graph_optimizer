@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+name = "inference_graph_optimizer"
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+onnx-proto  = { path = "crates/onnx-proto" }
+onnx-ir     = { path = "crates/onnx-ir" }
+prost       = "0.13"
+prost-build = "0.13"
+anyhow      = "1"
+clap        = { version = "4", features = ["derive"] }

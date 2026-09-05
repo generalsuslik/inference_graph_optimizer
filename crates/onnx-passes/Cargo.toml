@@ -1,0 +1,7 @@
+[package]
+name = "onnx-passes"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+onnx-ir.workspace = true
