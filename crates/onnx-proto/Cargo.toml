@@ -4,3 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+prost.workspace = true
+anyhow.workspace = true
+
+[build-dependencies]
+prost-build.workspace = true
