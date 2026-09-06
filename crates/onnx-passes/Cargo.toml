@@ -5,3 +5,4 @@ edition.workspace = true
 
 [dependencies]
 onnx-ir.workspace = true
+log.workspace = true

@@ -1,15 +1,5 @@
-//! Optimization passes over the [`onnx_ir`] graph.
+pub mod fuse_conv_relu;
+pub mod pass;
+pub mod pipeline;
 
-use onnx_ir::Graph;
-
-/// A single rewrite over the IR graph.
-pub trait Pass {
-    fn name(&self) -> &str;
-
-    fn run(&self, graph: &mut Graph) -> usize;
-}
-
-/// Runs every pass in order, returning the total number of rewrites applied.
-pub fn run_all(passes: &[&dyn Pass], graph: &mut Graph) -> usize {
-    passes.iter().map(|pass| pass.run(graph)).sum()
-}
+pub use fuse_conv_relu::{FuseConvRelu};
