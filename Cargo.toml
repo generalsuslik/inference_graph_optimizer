@@ -14,3 +14,4 @@ prost       = "0.13"
 prost-build = "0.13"
 anyhow      = "1"
 clap        = { version = "4", features = ["derive"] }
+log = "0.4"

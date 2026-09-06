@@ -150,6 +150,35 @@ impl Graph {
         Self::default()
     }
 
+    pub fn validate(&self) -> Result<(), Vec<String>> {
+        let mut errors = Vec::new();
+        for (i, node_opt) in self.nodes.iter().enumerate() {
+            if let Some(node) = node_opt {
+                for &input in &node.inputs {
+                    if input.idx() >= self.values.len() {
+                        errors.push(format!(
+                            "Node {} ({}) has input ValueId {} which is out of bounds",
+                            i, node.name, input.0
+                        ));
+                    }
+                }
+                for &output in &node.outputs {
+                    if output.idx() >= self.values.len() {
+                        errors.push(format!(
+                            "Node {} ({}) has output ValueId {} which is out of bounds",
+                            i, node.name, output.0
+                        ));
+                    }
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
     pub fn add_value(&mut self, name: impl Into<String>) -> ValueId {
         let id = ValueId(self.values.len() as u32);
         self.values.push(Value {
@@ -190,5 +219,102 @@ impl Graph {
             attrs,
         }));
         id
+    }
+
+    /// Returns the node at `id`, or `None` if it was never created or has been removed.
+    pub fn node(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(id.idx())?.as_ref()
+    }
+
+    /// Iterates over the live nodes in creation order, skipping removed ones.
+    pub fn nodes(&self) -> impl Iterator<Item = (NodeId, &Node)> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, node)| node.as_ref().map(|node| (NodeId(i as u32), node)))
+    }
+
+    /// Snapshots the live node ids, so a pass can mutate the graph while walking it.
+    pub fn node_ids(&self) -> Vec<NodeId> {
+        self.nodes().map(|(id, _)| id).collect()
+    }
+
+    /// Number of live nodes.
+    pub fn node_count(&self) -> usize {
+        self.nodes.iter().flatten().count()
+    }
+
+    pub fn value(&self, id: ValueId) -> Option<&Value> {
+        self.values.get(id.idx())
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = (ValueId, &Value)> {
+        self.values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| (ValueId(i as u32), value))
+    }
+
+    /// Returns the constant backing `id`, if it is an initializer rather than a computed value.
+    pub fn initializer(&self, id: ValueId) -> Option<&Tensor> {
+        self.initializers.get(&id)
+    }
+
+    pub fn initializers(&self) -> impl Iterator<Item = (ValueId, &Tensor)> {
+        self.initializers.iter().map(|(&id, tensor)| (id, tensor))
+    }
+
+    /// Whether `id` escapes the graph, and so must keep being produced.
+    pub fn is_output(&self, id: ValueId) -> bool {
+        self.outputs.contains(&id)
+    }
+
+    pub fn set_op(&mut self, node: NodeId, op: OpType) {
+        if let Some(Some(n)) = self.nodes.get_mut(node.idx()) {
+            n.op = op;
+        }
+    }
+
+    pub fn attrs_mut(&mut self, node: NodeId) -> Option<&mut Attrs> {
+        self.nodes.get_mut(node.idx())?.as_mut().map(|n| &mut n.attrs)
+    }
+
+    /// Repoints `node` at a new output list, keeping the producer links in sync.
+    ///
+    /// Values dropped from the list lose their producer and become dangling; it is the
+    /// caller's job to know they are dead.
+    pub fn set_node_outputs(&mut self, node: NodeId, outputs: Vec<ValueId>) {
+        let Some(Some(n)) = self.nodes.get_mut(node.idx()) else {
+            return;
+        };
+        let old = std::mem::replace(&mut n.outputs, outputs.clone());
+        for v in old {
+            if self.values[v.idx()].producer == Some(node) {
+                self.values[v.idx()].producer = None;
+            }
+        }
+        for v in outputs {
+            debug_assert!(
+                self.values[v.idx()].producer.is_none_or(|p| p == node),
+                "Value already has a different producer"
+            );
+            self.values[v.idx()].producer = Some(node);
+        }
+    }
+
+    /// Removes `node`, unlinking it from the values it read and wrote.
+    ///
+    /// The slot is tombstoned rather than compacted, so every other [`NodeId`] stays valid.
+    pub fn remove_node(&mut self, node: NodeId) -> Option<Node> {
+        let removed = self.nodes.get_mut(node.idx())?.take()?;
+        for &v in &removed.inputs {
+            self.values[v.idx()].consumers.retain(|&c| c != node);
+        }
+        for &v in &removed.outputs {
+            if self.values[v.idx()].producer == Some(node) {
+                self.values[v.idx()].producer = None;
+            }
+        }
+        Some(removed)
     }
 }
