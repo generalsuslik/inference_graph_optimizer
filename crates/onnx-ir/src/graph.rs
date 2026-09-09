@@ -264,7 +264,6 @@ impl Graph {
         self.initializers.iter().map(|(&id, tensor)| (id, tensor))
     }
 
-    /// Whether `id` escapes the graph, and so must keep being produced.
     pub fn is_output(&self, id: ValueId) -> bool {
         self.outputs.contains(&id)
     }
