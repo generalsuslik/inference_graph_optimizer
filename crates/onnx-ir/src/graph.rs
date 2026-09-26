@@ -278,6 +278,19 @@ impl Graph {
         self.nodes.get_mut(node.idx())?.as_mut().map(|n| &mut n.attrs)
     }
 
+    pub fn set_node_inputs(&mut self, node: NodeId, inputs: Vec<ValueId>) {
+        let Some(Some(n)) = self.nodes.get_mut(node.idx()) else {
+            return;
+        };
+        let old = std::mem::replace(&mut n.inputs, inputs.clone());
+        for v in old {
+            self.values[v.idx()].consumers.retain(|&c| c != node);
+        }
+        for v in inputs {
+            self.values[v.idx()].consumers.push(node);
+        }
+    }
+
     /// Repoints `node` at a new output list, keeping the producer links in sync.
     ///
     /// Values dropped from the list lose their producer and become dangling; it is the
