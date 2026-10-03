@@ -329,4 +329,8 @@ impl Graph {
         }
         Some(removed)
     }
+
+    pub fn remote_initializer(&mut self, id: ValueId) -> Option<Tensor> {
+        self.initializers.remove(&id)
+    }
 }
