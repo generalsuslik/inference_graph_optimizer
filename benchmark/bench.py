@@ -55,10 +55,13 @@ def bench(name, args):
         "original": ONNX_DIR / f"{name}.onnx",
         "optimized": ONNX_DIR / f"{name}.opt.onnx",
     }
-    x = np.random.default_rng(0).standard_normal((1, 3, 224, 224)).astype(np.float32)
+    # Exports have a static input shape, so the model says what to feed it.
+    original = session(paths["original"], DISABLE_ALL, args.threads)
+    shape = original.get_inputs()[0].shape
+    x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
 
     # Timing a model that computes something else would be meaningless.
-    reference = run(session(paths["original"], DISABLE_ALL, args.threads), x)
+    reference = run(original, x)
     optimized = run(session(paths["optimized"], DISABLE_ALL, args.threads), x)
     diff = float(np.abs(reference - optimized).max())
     if not np.allclose(reference, optimized, atol=1e-4, rtol=1e-4):
