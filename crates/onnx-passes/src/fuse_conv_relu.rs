@@ -1,6 +1,7 @@
-use onnx_ir::{Graph, NodeId, OpType, ValueId};
+use onnx_ir::{Graph, OpType};
 
 use crate::pass::Pass;
+use crate::pattern::{Pat, matches};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FuseConvRelu;
@@ -11,11 +12,15 @@ impl Pass for FuseConvRelu {
     }
 
     fn run(&self, graph: &mut Graph) -> usize {
+        // The Conv output disappears into the fused node; the matcher keeps it from being read elsewhere.
+        let pattern = Pat::node("relu", OpType::Relu, [Pat::any_node("conv", OpType::Conv)]);
         let mut fused = 0;
         for relu in graph.node_ids() {
-            let Some((conv, outputs)) = fusable(graph, relu) else {
+            let Some(m) = matches(graph, &pattern, relu).into_iter().next() else {
                 continue;
             };
+            let conv = m.node("conv");
+            let outputs = graph.node(relu).expect("matched nodes are live").outputs.clone();
             // Drop the Relu first: it still owns the producer link on the outputs the
             // Conv is about to take over.
             graph.remove_node(relu);
@@ -27,37 +32,10 @@ impl Pass for FuseConvRelu {
     }
 }
 
-/// If `relu` can absorb into its producing Conv, returns that Conv and the outputs it
-/// should take over.
-fn fusable(graph: &Graph, relu: NodeId) -> Option<(NodeId, Vec<ValueId>)> {
-    let relu = graph.node(relu)?;
-    if relu.op != OpType::Relu {
-        return None;
-    }
-    let [input] = relu.inputs[..] else {
-        return None;
-    };
-
-    // The Conv output disappears into the fused node, so nothing else may need it.
-    if graph.is_output(input) {
-        return None;
-    }
-    let value = graph.value(input)?;
-    if value.consumers.len() != 1 {
-        return None;
-    }
-
-    let conv = value.producer?;
-    if graph.node(conv)?.op != OpType::Conv {
-        return None;
-    }
-    Some((conv, relu.outputs.clone()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use onnx_ir::Attrs;
+    use onnx_ir::{Attrs, NodeId, ValueId};
 
     /// Builds `x -> Conv -> hidden -> Relu -> y`, returning the two node ids.
     fn conv_relu() -> (Graph, NodeId, NodeId) {

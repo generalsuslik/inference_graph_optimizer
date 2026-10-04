@@ -1,6 +1,7 @@
 use onnx_ir::{Graph, NodeId, OpType, Tensor, ValueId};
 
 use crate::pass::Pass;
+use crate::pattern::{Pat, matches};
 
 /// Folds an inference-mode BatchNormalization into the Conv that feeds it.
 ///
@@ -15,9 +16,10 @@ impl Pass for FoldConvBn {
     }
 
     fn run(&self, graph: &mut Graph) -> usize {
+        let patterns = patterns();
         let mut folded = 0;
         for bn in graph.node_ids() {
-            let Some(fold) = foldable(graph, bn) else {
+            let Some(fold) = foldable(graph, &patterns, bn) else {
                 continue;
             };
             let weight = graph.add_initializer(format!("fold_conv_bn_{}_w", fold.conv.0), fold.weight);
@@ -41,47 +43,33 @@ struct Fold {
     bias: Tensor, 
 }
 
-fn foldable(graph: &Graph, bn: NodeId) -> Option<Fold> {
-    let bn = graph.node(bn)?;
-    if bn.op != OpType::BatchNormalization {
-        return None;
-    }
+/// `Conv(x, w[, b]) -> BatchNormalization(gamma, beta, mean, var)`, one pattern per Conv arity.
+/// The Conv output turns into the folded result, so the matcher keeps it from being read elsewhere.
+fn patterns() -> [Pat; 2] {
+    let bn = |conv| {
+        Pat::node(
+            "bn",
+            OpType::BatchNormalization,
+            [conv, Pat::constant("gamma"), Pat::constant("beta"), Pat::constant("mean"), Pat::constant("var")],
+        )
+    };
+    [
+        bn(Pat::node("conv", OpType::Conv, [Pat::value("x"), Pat::constant("w"), Pat::constant("b")])),
+        bn(Pat::node("conv", OpType::Conv, [Pat::value("x"), Pat::constant("w")])),
+    ]
+}
 
+fn foldable(graph: &Graph, patterns: &[Pat], bn: NodeId) -> Option<Fold> {
+    let m = patterns.iter().flat_map(|p| matches(graph, p, bn)).next()?;
+    let bn = graph.node(bn)?;
     if bn.attrs.get_int("training_mode") == Some(1) || bn.outputs.len() != 1 {
         return None;
     }
 
-    let [input, gamma, beta, mean, var] = bn.inputs[..] else {
-        return None;
-    };
-
-    if graph.is_output(input) {
-        return None;
-    }
-
-    let value = graph.value(input)?;
-    if value.consumers.len() != 1 {
-        return None;
-    }
-
-    let conv = value.producer?;
-    let conv_node = graph.node(conv)?;
-    if conv_node.op != OpType::Conv {
-        return None;
-    }
-    let (input, weight, bias) = match conv_node.inputs[..] {
-        [input, weight] => (input, weight, None),
-        [input, weight, bias] => (input, weight, Some(bias)),
-        _ => return None,
-    };
-
-    let weight = graph.initializer(weight)?;
-    let bias = match bias {
-        Some(bias) => Some(graph.initializer(bias)?),
-        None => None,
-    };
-
-    let [Some(gamma), Some(beta), Some(mean), Some(var)] = [gamma, beta, mean, var].map(|v| graph.initializer(v)) else {
+    let tensor = |name| graph.initializer(m.value(name));
+    let weight = tensor("w")?;
+    let bias = m.get("b").and_then(|b| graph.initializer(b));
+    let [Some(gamma), Some(beta), Some(mean), Some(var)] = ["gamma", "beta", "mean", "var"].map(tensor) else {
         return None;
     };
 
@@ -111,8 +99,8 @@ fn foldable(graph: &Graph, bn: NodeId) -> Option<Fold> {
         })
         .collect();
     Some(Fold {
-        conv,
-        input,
+        conv: m.node("conv"),
+        input: m.value("x"),
         outputs: bn.outputs.clone(),
         weight: Tensor::new(weight.dims.clone(), folded_weight),
         bias: Tensor::new(vec![channels], folded_bias),

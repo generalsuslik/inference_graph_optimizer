@@ -3,6 +3,7 @@ pub mod eliminate_identity;
 pub mod fold_conv_bn;
 pub mod fuse_conv_relu;
 pub mod pass;
+pub mod pattern;
 pub mod pipeline;
 
 pub use dce::DCE;
