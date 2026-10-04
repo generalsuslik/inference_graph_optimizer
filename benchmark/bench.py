@@ -10,6 +10,7 @@ import onnxruntime as ort
 ONNX_DIR = Path(__file__).parent / "models" / "onnx"
 
 DISABLE_ALL = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+EXTENDED = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
 ENABLE_ALL = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
 # (label, which file, ORT level). The first two isolate what onnx-opt does: ORT's own
@@ -18,6 +19,7 @@ ENABLE_ALL = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 CONFIGS = [
     ("original, ORT off", "original", DISABLE_ALL),
     ("onnx-opt, ORT off", "optimized", DISABLE_ALL),
+    ("original, ORT extended", "original", EXTENDED),
     ("original, ORT all", "original", ENABLE_ALL),
 ]
 
