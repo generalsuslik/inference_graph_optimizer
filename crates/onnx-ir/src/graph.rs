@@ -124,6 +124,16 @@ impl Attrs {
         self.0.insert(key.to_string(), Attr::Float(value));
         self
     }
+
+    pub fn with_int(mut self, key: &str, value: i64) -> Self {
+        self.0.insert(key.to_string(), Attr::Int(value));
+        self
+    }
+
+    pub fn with_ints(mut self, key: &str, values: Vec<i64>) -> Self {
+        self.0.insert(key.to_string(), Attr::Ints(values));
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
