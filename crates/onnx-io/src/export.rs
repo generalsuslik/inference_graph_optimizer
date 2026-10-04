@@ -359,4 +359,74 @@ mod tests {
 
         assert!(Model::from_proto(proto).is_err());
     }
+
+    fn constant(output: &str, attr: AttributeProto) -> NodeProto {
+        node("Constant", &[], &[output], vec![attr])
+    }
+
+    /// The IR tensor behind the value named `name`, if it is an f32 initializer.
+    fn ir_initializer<'a>(model: &'a Model, name: &str) -> Option<&'a Tensor> {
+        let (id, _) = model.graph.values().find(|(_, v)| v.name == name)?;
+        model.graph.initializer(id)
+    }
+
+    #[test]
+    fn turns_numeric_constants_into_initializers() {
+        let value = AttributeProto {
+            name: Some("value".into()),
+            r#type: Some(AttributeType::Tensor as i32),
+            t: Some(tensor("", &[], &[2.0])),
+            ..Default::default()
+        };
+        let original = ModelProto {
+            graph: Some(GraphProto {
+                node: vec![
+                    constant("two", value),
+                    constant("eps", attr_proto("value_float", &Attr::Float(1e-5))),
+                    constant("shape", attr_proto("value_ints", &Attr::Ints(vec![1, -1]))),
+                    node("Pow", &["x", "two"], &["p"], vec![]),
+                    node("Add", &["p", "eps"], &["a"], vec![]),
+                    node("Reshape", &["a", "shape"], &["y"], vec![]),
+                ],
+                input: vec![info("x")],
+                output: vec![info("y")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let model = Model::from_proto(original).unwrap();
+        assert_eq!(model.graph.node_count(), 3);
+        let two = ir_initializer(&model, "two").expect("f32 constants enter the IR");
+        assert_eq!((two.dims.as_slice(), two.data.as_slice()), (&[][..], &[2.0][..]));
+        assert_eq!(ir_initializer(&model, "eps").unwrap().data, [1e-5]);
+        assert!(ir_initializer(&model, "shape").is_none(), "int64 constants stay out of the IR");
+
+        let exported = model.to_proto().unwrap();
+        assert_eq!(op_types(&exported), ["Pow", "Add", "Reshape"]);
+        assert_eq!(initializer_names(&exported), ["two", "eps", "shape"]);
+        let shape = &graph(&exported).initializer[2];
+        assert_eq!(shape.data_type, Some(DataType::Int64 as i32));
+        assert_eq!(shape.dims, [2]);
+        assert_eq!(shape.int64_data, [1, -1]);
+    }
+
+    #[test]
+    fn keeps_string_constants_as_nodes() {
+        let original = ModelProto {
+            graph: Some(GraphProto {
+                node: vec![
+                    constant("s", attr_proto("value_string", &Attr::String("hi".into()))),
+                    node("MyOp", &["s"], &["y"], vec![]),
+                ],
+                output: vec![info("y")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let exported = Model::from_proto(original).unwrap().to_proto().unwrap();
+        assert_eq!(op_types(&exported), ["Constant", "MyOp"]);
+        assert!(graph(&exported).initializer.is_empty());
+    }
 }

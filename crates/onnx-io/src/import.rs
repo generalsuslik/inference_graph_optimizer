@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use onnx_ir::{Attr, Attrs, Graph, OpType, Tensor, ValueId};
 use onnx_proto::attribute_proto::AttributeType;
 use onnx_proto::tensor_proto::{DataLocation, DataType};
-use onnx_proto::{AttributeProto, ModelProto, TensorProto};
+use onnx_proto::{AttributeProto, ModelProto, NodeProto, TensorProto};
 
 use crate::{Model, is_default_domain};
 
@@ -26,14 +26,7 @@ impl Model {
             if names.contains_key(&name) {
                 bail!("initializer `{name}` is defined twice");
             }
-            let id = match f32_tensor(&init) {
-                Some(tensor) => graph.add_initializer(&name, tensor),
-                None => {
-                    let id = graph.add_value(&name);
-                    opaque_initializers.insert(id, init);
-                    id
-                }
-            };
+            let id = add_initializer(&mut graph, &mut opaque_initializers, init);
             names.insert(name, id);
         }
 
@@ -48,11 +41,26 @@ impl Model {
             graph.inputs.push(id);
         }
 
+        // Constants become initializers, so passes only ever see one kind of constant. Before IR
+        // version 4 an initializer also has to be a graph input, which these would not be.
+        let fold_constants = proto.ir_version.is_none_or(|v| v >= 4);
+
         for node in std::mem::take(&mut graph_proto.node) {
             let node_name = node.name.clone().unwrap_or_default();
             // Outer values used inside a subgraph are invisible to the IR, so DCE could drop them.
             if node.attribute.iter().any(|a| a.g.is_some() || !a.graphs.is_empty()) {
                 bail!("node `{node_name}` has a subgraph attribute; subgraphs are not supported");
+            }
+
+            // A name read before its Constant defines it already has a value; keep the node then.
+            if fold_constants
+                && let Some(tensor) = constant_tensor(&node)
+                && let Some(name) = tensor.name.clone()
+                && !names.contains_key(&name)
+            {
+                let id = add_initializer(&mut graph, &mut opaque_initializers, tensor);
+                names.insert(name, id);
+                continue;
             }
 
             let inputs = node
@@ -101,6 +109,59 @@ impl Model {
             domains,
         })
     }
+}
+
+/// Adds `proto` as an initializer: into the IR if it is an f32 tensor, kept verbatim otherwise.
+fn add_initializer(
+    graph: &mut Graph,
+    opaque_initializers: &mut HashMap<ValueId, TensorProto>,
+    proto: TensorProto,
+) -> ValueId {
+    let name = proto.name.clone().unwrap_or_default();
+    match f32_tensor(&proto) {
+        Some(tensor) => graph.add_initializer(name, tensor),
+        None => {
+            let id = graph.add_value(name);
+            opaque_initializers.insert(id, proto);
+            id
+        }
+    }
+}
+
+/// The tensor a `Constant` node holds, named after its output. String and sparse constants
+/// return `None` and stay nodes.
+fn constant_tensor(node: &NodeProto) -> Option<TensorProto> {
+    if node.op_type.as_deref() != Some("Constant") || !is_default_domain(node.domain.as_deref().unwrap_or_default()) {
+        return None;
+    }
+    let ([output], [attr]) = (&node.output[..], &node.attribute[..]) else {
+        return None;
+    };
+    if output.is_empty() {
+        return None;
+    }
+    let float = |dims, float_data| TensorProto {
+        dims,
+        data_type: Some(DataType::Float as i32),
+        float_data,
+        ..Default::default()
+    };
+    let int64 = |dims, int64_data| TensorProto {
+        dims,
+        data_type: Some(DataType::Int64 as i32),
+        int64_data,
+        ..Default::default()
+    };
+    let mut tensor = match attr.name.as_deref()? {
+        "value" => attr.t.clone()?,
+        "value_float" => float(vec![], vec![attr.f.unwrap_or_default()]),
+        "value_floats" => float(vec![attr.floats.len() as i64], attr.floats.clone()),
+        "value_int" => int64(vec![], vec![attr.i.unwrap_or_default()]),
+        "value_ints" => int64(vec![attr.ints.len() as i64], attr.ints.clone()),
+        _ => return None,
+    };
+    tensor.name = Some(output.clone());
+    Some(tensor)
 }
 
 /// Looks up the value a node reads, creating it if nothing has defined it yet.
