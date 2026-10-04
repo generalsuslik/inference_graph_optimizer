@@ -213,11 +213,14 @@ fn op_type(domain: &str, op: &str) -> OpType {
         "Div" => OpType::Div,
         "Pow" => OpType::Pow,
         "Sqrt" => OpType::Sqrt,
+        "Erf" => OpType::Erf,
         "ReduceMean" => OpType::ReduceMean,
+        "Transpose" => OpType::Transpose,
         "MatMul" => OpType::MatMul,
         "Gemm" => OpType::Gemm,
         "Identity" => OpType::Identity,
         "LayerNormalization" => OpType::LayerNormalization,
+        "Gelu" => OpType::Gelu,
         other => OpType::Other(other.to_string()),
     }
 }

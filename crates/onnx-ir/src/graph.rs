@@ -18,6 +18,7 @@ impl ValueId {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct Tensor {
     pub dims: Vec<usize>,
     pub data: Vec<f32>,
@@ -61,11 +62,14 @@ pub enum OpType {
     Div,
     Pow,
     Sqrt,
+    Erf,
     ReduceMean,
+    Transpose,
     MatMul,
     Gemm,
     Identity,
     LayerNormalization,
+    Gelu,
     // Result of a fusion pass; carries the same semantics as Conv followed by Relu.
     FusedConvRelu,
     Other(String),
@@ -212,6 +216,13 @@ impl Graph {
         let id = self.add_value(name);
         self.initializers.insert(id, tensor);
         id
+    }
+
+    /// Makes an existing value a constant, keeping its name and consumers. A value is either
+    /// computed or constant, so it must not have a producer any more.
+    pub fn set_initializer(&mut self, id: ValueId, tensor: Tensor) {
+        debug_assert!(self.values[id.idx()].producer.is_none(), "Value still has a producer");
+        self.initializers.insert(id, tensor);
     }
 
     pub fn add_node(

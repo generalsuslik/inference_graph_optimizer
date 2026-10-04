@@ -527,4 +527,47 @@ mod tests {
         assert_eq!(exported.opset_import[0].version, Some(17));
         assert_eq!(exported.ir_version, Some(8));
     }
+
+    #[test]
+    fn exports_a_fused_gelu_at_opset_20() {
+        // torch's opset-13 erf GELU, its constants in Constant nodes.
+        let original = ModelProto {
+            ir_version: Some(7),
+            opset_import: vec![OperatorSetIdProto {
+                domain: Some(String::new()),
+                version: Some(13),
+            }],
+            graph: Some(GraphProto {
+                node: vec![
+                    constant("sqrt2", attr_proto("value_float", &Attr::Float(std::f32::consts::SQRT_2))),
+                    node("Div", &["x", "sqrt2"], &["div"], vec![]),
+                    node("Erf", &["div"], &["erf"], vec![]),
+                    constant("one", attr_proto("value_float", &Attr::Float(1.0))),
+                    node("Add", &["erf", "one"], &["plus_one"], vec![]),
+                    node("Mul", &["x", "plus_one"], &["times_x"], vec![]),
+                    constant("half", attr_proto("value_float", &Attr::Float(0.5))),
+                    node("Mul", &["times_x", "half"], &["y"], vec![]),
+                ],
+                input: vec![info("x")],
+                output: vec![info("y")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut model = Model::from_proto(original).unwrap();
+        Pipeline::standard(10).run(&mut model.graph);
+        let exported = model.to_proto().unwrap();
+
+        let [gelu] = &graph(&exported).node[..] else {
+            panic!("expected one node, got {:?}", op_types(&exported));
+        };
+        assert_eq!(gelu.op_type.as_deref(), Some("Gelu"));
+        assert_eq!(gelu.domain, None);
+        assert_eq!(gelu.input, ["x"]);
+        assert_eq!(gelu.output, ["y"]);
+        assert!(graph(&exported).initializer.is_empty());
+        assert_eq!(exported.opset_import[0].version, Some(20));
+        assert_eq!(exported.ir_version, Some(9));
+    }
 }
