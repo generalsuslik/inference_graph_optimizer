@@ -142,10 +142,16 @@ fn op_type(domain: &str, op: &str) -> OpType {
         "BatchNormalization" => OpType::BatchNormalization,
         "Relu" => OpType::Relu,
         "Add" => OpType::Add,
+        "Sub" => OpType::Sub,
         "Mul" => OpType::Mul,
+        "Div" => OpType::Div,
+        "Pow" => OpType::Pow,
+        "Sqrt" => OpType::Sqrt,
+        "ReduceMean" => OpType::ReduceMean,
         "MatMul" => OpType::MatMul,
         "Gemm" => OpType::Gemm,
         "Identity" => OpType::Identity,
+        "LayerNormalization" => OpType::LayerNormalization,
         other => OpType::Other(other.to_string()),
     }
 }
