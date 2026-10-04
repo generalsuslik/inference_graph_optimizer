@@ -31,19 +31,33 @@ def session(path, level, threads):
     return ort.InferenceSession(str(path), opts, providers=["CPUExecutionProvider"])
 
 
-def run(sess, x):
-    return sess.run(None, {sess.get_inputs()[0].name: x})[0]
+def run(sess, feed):
+    return sess.run(None, feed)[0]
 
 
-def time_ms(sess, x, warmup, runs):
-    for _ in range(warmup):
-        run(sess, x)
-    samples = []
+def example_feed(name, sess):
+    """The inputs export.py saved with the model, or random floats for models exported before it did."""
+    saved = ONNX_DIR / f"{name}.inputs.npz"
+    if saved.exists():
+        with np.load(saved) as arrays:
+            return {key: arrays[key] for key in arrays.files}
+    rng = np.random.default_rng(0)
+    return {i.name: rng.standard_normal(i.shape).astype(np.float32) for i in sess.get_inputs()}
+
+
+def time_ms(sessions, feed, warmup, runs):
+    """Median and p90 per session, timed round-robin so that drift in clock speed or background
+    load hits every config alike instead of whichever happened to run during it."""
+    for sess in sessions:
+        for _ in range(warmup):
+            run(sess, feed)
+    samples = [[] for _ in sessions]
     for _ in range(runs):
-        start = time.perf_counter_ns()
-        run(sess, x)
-        samples.append((time.perf_counter_ns() - start) / 1e6)
-    return np.median(samples), np.percentile(samples, 90)
+        for sess, out in zip(sessions, samples):
+            start = time.perf_counter_ns()
+            run(sess, feed)
+            out.append((time.perf_counter_ns() - start) / 1e6)
+    return [(np.median(s), np.percentile(s, 90)) for s in samples]
 
 
 def node_count(path):
@@ -58,24 +72,21 @@ def bench(name, args):
     # The result has to be valid ONNX, not just something onnxruntime happens to load.
     onnx.checker.check_model(str(paths["optimized"]), full_check=True)
 
-    # Exports have a static input shape, so the model says what to feed it.
-    original = session(paths["original"], DISABLE_ALL, args.threads)
-    shape = original.get_inputs()[0].shape
-    x = np.random.default_rng(0).standard_normal(shape).astype(np.float32)
+    sessions = [session(paths[which], level, args.threads) for _, which, level in CONFIGS]
+    feed = example_feed(name, sessions[0])
 
     # Timing a model that computes something else would be meaningless.
-    reference = run(original, x)
-    optimized = run(session(paths["optimized"], DISABLE_ALL, args.threads), x)
+    reference = run(sessions[0], feed)
+    optimized = run(sessions[1], feed)
     diff = float(np.abs(reference - optimized).max())
     if not np.allclose(reference, optimized, atol=1e-4, rtol=1e-4):
         raise SystemExit(f"{name}: optimized output differs from the original (max abs diff {diff:.2e})")
 
     print(f"\n{name}  (threads={args.threads}, {args.runs} runs, max abs diff {diff:.1e})")
     print(f"  {'config':<20} {'nodes':>6} {'median ms':>10} {'p90 ms':>8} {'speedup':>8}")
-    baseline = None
-    for label, which, level in CONFIGS:
-        median, p90 = time_ms(session(paths[which], level, args.threads), x, args.warmup, args.runs)
-        baseline = baseline or median
+    timings = time_ms(sessions, feed, args.warmup, args.runs)
+    baseline = timings[0][0]
+    for (label, which, _), (median, p90) in zip(CONFIGS, timings):
         print(f"  {label:<20} {node_count(paths[which]):>6} {median:>10.2f} {p90:>8.2f} {baseline / median:>7.2f}x")
 
 
