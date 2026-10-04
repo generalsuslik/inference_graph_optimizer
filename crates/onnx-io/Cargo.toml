@@ -1,0 +1,12 @@
+[package]
+name = "onnx-io"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+onnx-proto.workspace = true
+onnx-ir.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+onnx-passes.workspace = true
