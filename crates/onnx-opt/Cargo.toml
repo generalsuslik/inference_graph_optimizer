@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+onnx-io.workspace = true
+onnx-passes.workspace = true
+anyhow.workspace = true
+clap.workspace = true
