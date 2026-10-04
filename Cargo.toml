@@ -10,6 +10,8 @@ edition = "2024"
 [workspace.dependencies]
 onnx-proto  = { path = "crates/onnx-proto" }
 onnx-ir     = { path = "crates/onnx-ir" }
+onnx-passes = { path = "crates/onnx-passes" }
+onnx-io     = { path = "crates/onnx-io" }
 prost       = "0.13"
 prost-build = "0.13"
 anyhow      = "1"

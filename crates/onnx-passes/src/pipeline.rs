@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use onnx_ir::Graph;
 
 use crate::pass::{Pass};
-use crate::{DCE, FoldConvBn, FuseConvRelu};
+use crate::{DCE, EliminateIdentity, FoldConvBn, FuseConvRelu};
 
 #[derive(Debug, Default)]
 pub struct Report {
@@ -26,13 +26,15 @@ impl Pipeline {
         }
     }
 
-    /// Every pass, in the order they should run. BN folding goes before Conv+Relu fusion
-    /// so a `Conv -> BatchNormalization -> Relu` chain collapses in one iteration, and DCE
+    /// Every pass, in the order they should run. Identity elimination goes first so that
+    /// constants hidden behind an alias reach the folds as initializers. BN folding goes
+    /// before Conv+Relu fusion so a `Conv -> BatchNormalization -> Relu` chain collapses in one iteration, and DCE
     /// goes last to sweep up whatever the rewrites left behind.
     pub fn standard(max_iterations: usize) -> Self {
         Self::new(
             vec![
-                Box::new(FoldConvBn), 
+                Box::new(EliminateIdentity),
+                Box::new(FoldConvBn),
                 Box::new(FuseConvRelu), 
                 Box::new(DCE)
             ],
