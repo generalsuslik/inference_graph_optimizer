@@ -55,6 +55,9 @@ def bench(name, args):
         "original": ONNX_DIR / f"{name}.onnx",
         "optimized": ONNX_DIR / f"{name}.opt.onnx",
     }
+    # The result has to be valid ONNX, not just something onnxruntime happens to load.
+    onnx.checker.check_model(str(paths["optimized"]), full_check=True)
+
     # Exports have a static input shape, so the model says what to feed it.
     original = session(paths["original"], DISABLE_ALL, args.threads)
     shape = original.get_inputs()[0].shape

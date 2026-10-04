@@ -6,7 +6,7 @@ use onnx_proto::attribute_proto::AttributeType;
 use onnx_proto::tensor_proto::DataType;
 use onnx_proto::{AttributeProto, ModelProto, NodeProto, OperatorSetIdProto, TensorProto};
 
-use crate::{MS_DOMAIN, Model};
+use crate::{MS_DOMAIN, Model, is_default_domain};
 
 impl Model {
     pub fn to_proto(&self) -> Result<ModelProto> {
@@ -89,8 +89,40 @@ impl Model {
                 version: Some(1),
             });
         }
+
+        if let Some(opset) = graph.opset {
+            let default = model
+                .opset_import
+                .iter_mut()
+                .find(|o| is_default_domain(o.domain.as_deref().unwrap_or_default()));
+            match default {
+                Some(entry) if entry.version.is_none_or(|v| v < opset) => entry.version = Some(opset),
+                Some(_) => {}
+                None => model.opset_import.push(OperatorSetIdProto {
+                    domain: Some(String::new()),
+                    version: Some(opset),
+                }),
+            }
+            if let Some(ir) = min_ir_version(opset)
+                && model.ir_version.is_some_and(|v| v < ir)
+            {
+                model.ir_version = Some(ir);
+            }
+        }
         Ok(model)
     }
+}
+
+/// The IR version each opset shipped with (`onnx.helper.VERSION_TABLE`); a model declaring the
+/// opset needs at least that.
+fn min_ir_version(opset: i64) -> Option<i64> {
+    Some(match opset {
+        13..=14 => 7,
+        15..=18 => 8,
+        19..=20 => 9,
+        21..=22 => 10,
+        _ => return None,
+    })
 }
 
 /// Live nodes in an order where every producer comes before its consumers, as ONNX requires.
@@ -428,5 +460,71 @@ mod tests {
         let exported = Model::from_proto(original).unwrap().to_proto().unwrap();
         assert_eq!(op_types(&exported), ["Constant", "MyOp"]);
         assert!(graph(&exported).initializer.is_empty());
+    }
+
+    #[test]
+    fn declares_a_raised_opset_with_the_ir_version_it_needs() {
+        let mut proto = conv_bn_relu();
+        proto.ir_version = Some(7);
+        let mut model = Model::from_proto(proto).unwrap();
+        assert_eq!(model.graph.opset, Some(13));
+
+        model.graph.opset = Some(17);
+        let exported = model.to_proto().unwrap();
+
+        let default = OperatorSetIdProto {
+            domain: Some(String::new()),
+            version: Some(17),
+        };
+        assert_eq!(exported.opset_import, vec![default]);
+        assert_eq!(exported.ir_version, Some(8));
+    }
+
+    #[test]
+    fn exports_a_fused_layer_norm_at_opset_17() {
+        // torch's opset-13 LayerNorm over the last axis, its scalars in Constant nodes.
+        let axes = || vec![attr_proto("axes", &Attr::Ints(vec![-1]))];
+        let original = ModelProto {
+            ir_version: Some(7),
+            opset_import: vec![OperatorSetIdProto {
+                domain: Some(String::new()),
+                version: Some(13),
+            }],
+            graph: Some(GraphProto {
+                node: vec![
+                    node("ReduceMean", &["x"], &["mean"], axes()),
+                    node("Sub", &["x", "mean"], &["d"], vec![]),
+                    constant("two", attr_proto("value_float", &Attr::Float(2.0))),
+                    node("Pow", &["d", "two"], &["d2"], vec![]),
+                    node("ReduceMean", &["d2"], &["var"], axes()),
+                    constant("eps", attr_proto("value_float", &Attr::Float(1e-5))),
+                    node("Add", &["var", "eps"], &["var_eps"], vec![]),
+                    node("Sqrt", &["var_eps"], &["std"], vec![]),
+                    node("Div", &["d", "std"], &["norm"], vec![]),
+                    node("Mul", &["norm", "gamma"], &["scaled"], vec![]),
+                    node("Add", &["scaled", "beta"], &["y"], vec![]),
+                ],
+                initializer: vec![tensor("gamma", &[4], &[1.0, 2.0, 3.0, 4.0]), tensor("beta", &[4], &[0.5; 4])],
+                input: vec![info("x")],
+                output: vec![info("y")],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let mut model = Model::from_proto(original).unwrap();
+        Pipeline::standard(10).run(&mut model.graph);
+        let exported = model.to_proto().unwrap();
+
+        let [ln] = &graph(&exported).node[..] else {
+            panic!("expected one node, got {:?}", op_types(&exported));
+        };
+        assert_eq!(ln.op_type.as_deref(), Some("LayerNormalization"));
+        assert_eq!(ln.domain, None);
+        assert_eq!(ln.input, ["x", "gamma", "beta"]);
+        assert_eq!(ln.output, ["y"]);
+        assert_eq!(initializer_names(&exported), ["gamma", "beta"]);
+        assert_eq!(exported.opset_import[0].version, Some(17));
+        assert_eq!(exported.ir_version, Some(8));
     }
 }

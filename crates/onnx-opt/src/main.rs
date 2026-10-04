@@ -5,8 +5,6 @@ use clap::Parser;
 use onnx_io::Model;
 use onnx_passes::pipeline::Pipeline;
 
-/// Optimizes an ONNX model for inference: folds BatchNormalization into Conv, fuses
-/// Conv+Relu into onnxruntime's FusedConv and removes dead nodes.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
@@ -38,6 +36,11 @@ fn main() -> Result<()> {
     );
     for (pass, count) in &report.rewrites {
         println!("  {pass:<20} {count}");
+    }
+    if let (Some(before), Some(after)) = (report.opset_before, report.opset_after)
+        && before != after
+    {
+        println!("  default opset raised {before} -> {after}: the runtime must support opset {after}");
     }
     println!("wrote {}", args.output.display());
     Ok(())

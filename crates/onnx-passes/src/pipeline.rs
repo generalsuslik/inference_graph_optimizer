@@ -11,6 +11,10 @@ pub struct Report {
     pub rewrites: BTreeMap<&'static str, usize>,
     pub nodes_before: usize,
     pub nodes_after: usize,
+    /// Default opset the graph declared before and after; a pass emitting a newer op raises it,
+    /// which raises what the runtime has to support.
+    pub opset_before: Option<i64>,
+    pub opset_after: Option<i64>,
 }
 
 pub struct Pipeline {
@@ -47,6 +51,7 @@ impl Pipeline {
     pub fn run(&self, g: &mut Graph) -> Report {
         let mut report = Report {
             nodes_before: g.node_count(),
+            opset_before: g.opset,
             ..Default::default()
         };
 
@@ -77,6 +82,7 @@ impl Pipeline {
             report.iterations = it + 1;
         }
         report.nodes_after = g.node_count();
+        report.opset_after = g.opset;
         report
     }
 }

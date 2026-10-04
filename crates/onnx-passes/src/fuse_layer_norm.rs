@@ -13,8 +13,14 @@ use crate::pattern::{Match, Pat, matches};
 ///
 /// `x` and `d` each feed two nodes of the chain, so this is the pattern that leans on the matcher's
 /// shared names and its check that no intermediate is read outside the match.
+///
+/// LayerNormalization is standard from opset 17, so a fusion raises the graph's default opset to
+/// [`LAYER_NORM_OPSET`] if it was older.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FuseLayerNorm;
+
+/// The opset that standardized LayerNormalization.
+pub const LAYER_NORM_OPSET: i64 = 17;
 
 /// Every node of the pattern; the rewrite removes them all.
 const NODES: [&str; 9] = ["mean", "d", "pow", "var", "var_eps", "std", "norm", "scaled", "y"];
@@ -47,6 +53,11 @@ impl Pass for FuseLayerNorm {
                     .with_float("epsilon", fusion.epsilon),
             );
             fused += 1;
+        }
+        // The fused op only exists from opset 17 on, so the model has to declare it. Whether every
+        // other op still means the same there is for onnx.checker and the differential test to say.
+        if fused > 0 {
+            graph.opset = graph.opset.map(|v| v.max(LAYER_NORM_OPSET));
         }
         fused
     }
@@ -298,12 +309,41 @@ mod tests {
     }
 
     #[test]
+    fn declares_the_opset_layer_normalization_needs() {
+        let mut ln = layer_norm(Options::default());
+        ln.graph.opset = Some(13);
+
+        assert_eq!(FuseLayerNorm.run(&mut ln.graph), 1);
+        assert_eq!(ln.graph.opset, Some(LAYER_NORM_OPSET));
+    }
+
+    #[test]
+    fn keeps_a_newer_opset() {
+        let mut ln = layer_norm(Options::default());
+        ln.graph.opset = Some(18);
+
+        assert_eq!(FuseLayerNorm.run(&mut ln.graph), 1);
+        assert_eq!(ln.graph.opset, Some(18));
+    }
+
+    #[test]
+    fn leaves_the_opset_alone_without_a_fusion() {
+        let mut ln = layer_norm(Options { keepdims: Some(0), ..Default::default() });
+        ln.graph.opset = Some(13);
+
+        assert_eq!(FuseLayerNorm.run(&mut ln.graph), 0);
+        assert_eq!(ln.graph.opset, Some(13));
+    }
+
+    #[test]
     fn standard_pipeline_leaves_one_node_and_drops_the_scalars() {
         let mut ln = layer_norm(Options::default());
+        ln.graph.opset = Some(13);
         let report = crate::pipeline::Pipeline::standard(10).run(&mut ln.graph);
 
         assert_eq!(report.nodes_after, 1);
         assert_eq!(report.rewrites.get("fuse-layer-norm"), Some(&1));
+        assert_eq!((report.opset_before, report.opset_after), (Some(13), Some(17)));
         assert!(ln.graph.initializer(ln.values["two"]).is_none());
         assert!(ln.graph.initializer(ln.values["eps"]).is_none());
     }

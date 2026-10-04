@@ -159,6 +159,9 @@ pub struct Graph {
     initializers: HashMap<ValueId, Tensor>,
     pub inputs: Vec<ValueId>,
     pub outputs: Vec<ValueId>,
+    /// Version of the default ONNX domain the graph is written against, or `None` when unknown
+    /// (graphs built by hand). A pass that emits a newer op raises it.
+    pub opset: Option<i64>,
 }
 
 impl Graph {

@@ -16,6 +16,11 @@ impl Model {
         }
 
         let mut graph = Graph::new();
+        graph.opset = proto
+            .opset_import
+            .iter()
+            .find(|o| is_default_domain(o.domain.as_deref().unwrap_or_default()))
+            .and_then(|o| o.version);
         let mut names: HashMap<String, ValueId> = HashMap::new();
         let mut opaque_initializers = HashMap::new();
         let mut opaque_attrs = HashMap::new();
